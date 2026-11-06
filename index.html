@@ -34,6 +34,11 @@
   .sub{color:var(--muted);margin:0 0 22px}
   .opts{display:grid;gap:12px}
   .opts.two{grid-template-columns:1fr 1fr}
+  .opts.three{grid-template-columns:repeat(3,1fr)}
+  .rooms{display:grid;gap:12px}
+  .rooms .row{display:flex;align-items:center;gap:14px}
+  .rooms .row b{flex:0 0 90px;font-weight:600}
+  .rooms .row .inp{flex:1}
   .opt{all:unset;box-sizing:border-box;cursor:pointer;display:flex;align-items:center;gap:14px;padding:16px 18px;border:2px solid var(--line);border-radius:16px;background:#fff;transition:border-color .15s,background .15s,transform .15s}
   .opt:hover{border-color:var(--teal-line);transform:translateY(-1px)}
   .opt:focus-visible{outline:3px solid var(--teal-soft)}
@@ -75,7 +80,7 @@
   .small{color:var(--muted);font-size:13.5px;text-align:center;margin:0}
   .hidden{display:none!important}
   @media (max-width:560px){
-    .opts.two{grid-template-columns:1fr}
+    .opts.two,.opts.three{grid-template-columns:1fr}
     .grid2{grid-template-columns:1fr}
     h2{font-size:25px}
     .top{padding:18px 18px}.body{padding:22px 18px 26px}.progress{padding:14px 18px 0}
@@ -112,6 +117,12 @@ const SOLAR_PRICES = [ // per totaal vermogen (Wp)
   {maxWp:8000, low:5790, high:6412}
 ];
 const BATTERY_PRICES = { 5:{low:2166,high:3325}, 10:{low:3824,high:5341}, 15:{low:5482,high:7357} };
+const AIRCO_PRICES = { // per ruimte/binnenunit
+  single:{low:1200, high:1800},            // 1 ruimte: single-split per ruimte
+  multiBase:{low:1500, high:2500},         // multi-split: buitenunit
+  multiPerRoom:{low:800, high:1400}        // multi-split: per binnenunit
+};
+const AIRCO_W_PER_M2 = {slecht:150, gemiddeld:120, goed:100, uitstekend:80};
 const PANEL_WP = 450, PANEL_M2 = 1.7, KWH_PER_KWP = 950, EUR_PER_KWH = 0.30;
 /* ============================================================= */
 
@@ -126,13 +137,15 @@ const ICONS = {
   meter:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h3"/></svg>',
   goal:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg>',
   no:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="m8 8 8 8"/></svg>',
+  snow:'<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v20M4.9 7l14.2 10M4.9 17 19.1 7M9 4l3 2 3-2M9 20l3-2 3 2"/></svg>',
   check:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg>'
 };
 
-const state = { product:null, step:0, solar:{roof:null,orient:null,surface:40,mode:null,kwh:null,eur:null,gezin:null}, bat:{kwh:null,solar:null,panels:null,wp:400,meter:null,phase:null,goal:null} };
+const state = { product:null, step:0, solar:{roof:null,orient:null,surface:40,mode:null,kwh:null,eur:null,gezin:null}, bat:{kwh:null,solar:null,panels:null,wp:400,meter:null,phase:null,goal:null}, airco:{count:null,rooms:[],iso:null,heat:null} };
 const SOLAR_STEPS = ['roof','orient','surface','usage'];
 const BAT_STEPS = ['bkwh','bsolar','bmeter','bphase','bgoal'];
-const steps = () => state.product==='solar' ? SOLAR_STEPS : BAT_STEPS;
+const AIRCO_STEPS = ['acount','arooms','aiso','aheat'];
+const steps = () => state.product==='solar' ? SOLAR_STEPS : state.product==='airco' ? AIRCO_STEPS : BAT_STEPS;
 const eur = n => '€ ' + Math.round(n).toLocaleString('nl-BE');
 const $ = s => document.querySelector(s);
 
@@ -184,6 +197,24 @@ function calcBattery(b){
   return {cap, price:BATTERY_PRICES[cap], backup};
 }
 
+/* ---------- Rekenlogica airco ---------- */
+const r50 = n => Math.round(n/50)*50;
+function calcAirco(a){
+  const n = a.rooms.length || 1;
+  const m2 = a.rooms.reduce((t,r)=>t+(r||0),0);
+  const kw = Math.ceil(m2*(AIRCO_W_PER_M2[a.iso]||120)/1000*10)/10;
+  let low, high, spec;
+  if(n>=2){
+    low = r50(AIRCO_PRICES.multiBase.low + AIRCO_PRICES.multiPerRoom.low*n);
+    high = r50(AIRCO_PRICES.multiBase.high + AIRCO_PRICES.multiPerRoom.high*n);
+    spec = `Multi-split · 1 buitenunit + ${n} binnenunits · ${kw.toLocaleString('nl-BE')} kW`;
+  } else {
+    low = r50(AIRCO_PRICES.single.low); high = r50(AIRCO_PRICES.single.high);
+    spec = `Single-split · 1 binnenunit · ${kw.toLocaleString('nl-BE')} kW`;
+  }
+  return {price:{low,high}, spec};
+}
+
 /* ---------- UI helpers ---------- */
 function opt(key,val,title,desc,icon,sel){
   return `<button type="button" class="opt${sel?' sel':''}" data-k="${key}" data-v="${val}">
@@ -220,6 +251,10 @@ function valid(){
     case 'bmeter': return b.meter!==null;
     case 'bphase': return !!b.phase;
     case 'bgoal': return !!b.goal;
+    case 'acount': return state.airco.rooms.length>0;
+    case 'arooms': return state.airco.rooms.length>0 && state.airco.rooms.every(r=>r>=5);
+    case 'aiso': return !!state.airco.iso;
+    case 'aheat': return state.airco.heat!==null;
   }
   return false;
 }
@@ -230,9 +265,10 @@ function render(){
   const v=$('#view'), s=state.solar, b=state.bat;
   if(!state.product){
     v.innerHTML = `<h2>Waarvoor wil je een richtprijs?</h2><p class="sub">Beantwoord een paar korte vragen en je ziet meteen je richtprijs.</p>
-      <div class="opts two big">
+      <div class="opts three big">
         ${opt('product','solar','Zonnepanelen','Richtprijs voor een installatie op jouw dak','sun',false)}
         ${opt('product','battery','Thuisbatterij','Richtprijs voor een batterij op maat van je verbruik','battery',false)}
+        ${opt('product','airco','Airco','Richtprijs voor koelen en verwarmen per ruimte','snow',false)}
       </div>`;
     return bind();
   }
@@ -294,6 +330,20 @@ function render(){
         ${opt('bgoal','backup','Backup bij stroomuitval','Nooit zonder stroom','battery',b.goal==='backup')}
         ${opt('bgoal','peak','Pieken afvlakken','Lager capaciteitstarief','plug',b.goal==='peak')}
         ${opt('bgoal','all','Alle bovenstaande','','check',b.goal==='all')}</div>`; break;
+    case 'acount':
+      h=`<h2>Hoeveel ruimtes wil je koelen of verwarmen?</h2><p class="sub">Elke ruimte krijgt een eigen binnenunit.</p>
+        <div class="opts three">${[1,2,3,4,5,6].map(n=>opt('acount',n,n===6?'6 of meer':`${n} ${n===1?'ruimte':'ruimtes'}`,'','snow',state.airco.count===n)).join('')}</div>`; break;
+    case 'arooms':
+      h=`<h2>Hoe groot is elke ruimte?</h2><p class="sub">Oppervlakte in m² per ruimte.</p>
+        <div class="rooms">${state.airco.rooms.map((r,i)=>`<div class="row"><b>Ruimte ${i+1}</b>${numInput('room'+i,r,'m²','20',5,150,1)}</div>`).join('')}</div>
+        <p class="hint" id="roomTot">Totaal: ${state.airco.rooms.reduce((t,r)=>t+(r||0),0)} m²</p>`; break;
+    case 'aiso':
+      h=`<h2>Hoe goed is je woning geïsoleerd?</h2><p class="sub">Dit bepaalt het nodige vermogen.</p><div class="opts two">
+        ${[['slecht','Slecht geïsoleerd','Oudere woning, enkel glas'],['gemiddeld','Gemiddeld','Dubbel glas, basisnorm'],['goed','Goed','Hoogrendementsglas, dakisolatie'],['uitstekend','Uitstekend','Nieuwbouw of BEN-woning']].map(([k,t,d])=>opt('aiso',k,t,d,'roof',state.airco.iso===k)).join('')}</div>`; break;
+    case 'aheat':
+      h=`<h2>Wil je ook verwarmen met je airco?</h2><p class="sub">Een split-airco kan ook als warmtepomp werken.</p><div class="opts two">
+        ${opt('aheat','ja','Ja, ook verwarmen','','sun',state.airco.heat===true)}
+        ${opt('aheat','nee','Nee, alleen koelen','','snow',state.airco.heat===false)}</div>`; break;
     default: return renderResult();
   }
   v.innerHTML = h + nav(valid(), lbl);
@@ -306,6 +356,9 @@ function renderResult(){
     const r=calcSolar(state.solar);
     label='Richtprijs zonnepanelen'; price=r.price;
     spec=`${r.panels} panelen · ${r.kwp.toLocaleString('nl-BE',{minimumFractionDigits:2,maximumFractionDigits:2})} kWp`;
+  } else if(state.product==='airco'){
+    const r=calcAirco(state.airco);
+    label='Richtprijs airco'; price=r.price; spec=r.spec;
   } else {
     const r=calcBattery(state.bat);
     label='Richtprijs thuisbatterij'; price=r.price;
@@ -338,6 +391,9 @@ function bind(){
       case 'bmeter': b.meter = val==='ja'; advance=true; break;
       case 'bphase': b.phase=val; advance=true; break;
       case 'bgoal': b.goal=val; advance=true; break;
+      case 'acount': { const n=+val, old=state.airco.rooms; state.airco.count=n; state.airco.rooms=Array.from({length:n},(_,i)=>old[i]??20); advance=true; break; }
+      case 'aiso': state.airco.iso=val; advance=true; break;
+      case 'aheat': state.airco.heat = val==='ja'; advance=true; break;
     }
     render();
     if(advance) setTimeout(go,180);
@@ -346,6 +402,7 @@ function bind(){
   num('surface',x=>{s.surface=x||0; const r=$('#surfaceRange'); if(r) r.value=Math.min(150,s.surface);});
   num('kwh',x=>s.kwh=x); num('eur',x=>s.eur=x); num('bkwh',x=>b.kwh=x);
   num('bpanels',x=>b.panels=x); num('bwp',x=>b.wp=x);
+  state.airco.rooms.forEach((_,i)=>num('room'+i,x=>state.airco.rooms[i]=x||0));
   const rg=$('#surfaceRange'); if(rg) rg.oninput=()=>{s.surface=+rg.value; $('#surface').value=s.surface; refresh();};
   const back=$('#back'); if(back) back.onclick=()=>{ if(state.step===0) state.product=null; else state.step--; render(); };
   const next=$('#next'); if(next) next.onclick=go;
@@ -355,6 +412,7 @@ function refresh(){ // live hints zonder focus te verliezen
   const s=state.solar,b=state.bat, n=$('#next'); if(n) n.disabled=!valid();
   const pf=$('#panelsFit'); if(pf) pf.textContent=`± ${Math.floor((s.surface||0)/PANEL_M2)} panelen mogelijk`;
   const eh=$('#eurHint'); if(eh) eh.textContent=s.eur?`≈ ${Math.round(s.eur/EUR_PER_KWH).toLocaleString('nl-BE')} kWh per jaar`:'';
+  const rt=$('#roomTot'); if(rt) rt.textContent=`Totaal: ${state.airco.rooms.reduce((t,r)=>t+(r||0),0)} m²`;
   const kh=$('#kwpHint'); if(kh) kh.textContent=b.panels>=4?`≈ ${(b.panels*(b.wp||0)/1000).toLocaleString('nl-BE',{maximumFractionDigits:2})} kWp`:'Weet je het vermogen niet? Laat 400 Wp staan.';
   document.querySelectorAll('.chip').forEach(c=>{ const k=c.dataset.k,v=+c.dataset.v;
     if(k==='surface') c.classList.toggle('sel',s.surface===v);
